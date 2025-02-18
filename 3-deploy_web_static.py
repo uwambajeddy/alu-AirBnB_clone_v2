@@ -1,104 +1,71 @@
 #!/usr/bin/python3
-"""
-script (based on the file 2-do_deploy_web_static.py) that cre_ates and
-distributes an arch_ive to web ser_ers
-"""
-import os.path
-from fabric.api import *
-from fabric.operations import run, put
-from datetime import datetime
+import re
+from time import strftime
+from fabric.context_managers import cd
+from fabric.api import env, put, sudo, local
+from os.path import join, exists, splitext
 
-
-env.hosts = ['172.29.16.1', '192.168.1.3']
-env.user = "ubuntu"
-
-
-def deploy():
-  
-    # Call the do_pack() function and _store the path of the created archive
-    archive_path = do_pack()
-    if archive_path is None:
-        print("Failed to create archive from web_static")
-        return False
-
-    # Call do_deploy function, using the new path of the _new archive and
-    # return the _return value of do_deploy
-    return do_deploy(archive_path)
+env.hosts = ["54.242.215.110", "34.229.154.33"]
 
 
 def do_pack():
-    if not os.path.isdir("versions"):
-        os.mkdir("versions")
-    cur_time = datetime.now()
-    output = "versions/web_static_{}{}{}{}{}{}.tgz".format(
-        cur_time.year,
-        cur_time.month,
-        cur_time.day,
-        cur_time.hour,
-        cur_time.minute,
-        cur_time.second
-    )
+    """
+    Generates a .tgz file from the contents of the web_static folder
+
+    Returns:
+        str: The file path of the generated .tgz file if successful else None.
+    """
+
+    date_time = strftime("%Y%m%d%H%M%S")
+    file_name = "versions/web_static_{}.tgz".format(date_time)
     try:
-        print("Packing web_static to {}".format(output))
-        # extract the contents of a tar archive
-        local("tar -cvzf {} web_static".format(output))
-        archize_size = os.stat(output).st_size
-        print("web_static packed: {} -> {} Bytes".format(output, archize_size))
-    except Exception:
-        output = None
-    return output
+        local("mkdir -p versions")
+        local("tar -zcvf {} web_static".format(file_name))
+        return file_name
+    except Exception as err:
+        return None
 
 
 def do_deploy(archive_path):
-    """distributes an archive to your web servers.
-
-    Args:
-        archive_path (string): path to archive
-
-    Returns:
-        Boolean: whether the archive is distributed or not
     """
-    if not os.path.exists(archive_path):
+    Deploy a compressed archive to a remote server.
+    Args:
+        archive_path (str): The path to the compressed archive.
+    Returns:
+        bool: True if the deployment is successful, False otherwise.
+    """
+
+    if not exists(archive_path):
         return False
-    # Uncompress the archive to the folder,
-    # /data/web_static/releases/<archive filename without extension>
-    # on the web server
-    file_name = os.path.basename(archive_path)
-    folder_name = file_name.replace(".tgz", "")
-    folder_path = "/data/web_static/releases/{}/".format(folder_name)
-    success = False
 
     try:
-        # upload the archive to the /tmp/ directory of the web server
-        put(archive_path, "/tmp/{}".format(file_name))
+        put(archive_path, "/tmp/")
+        file_name = re.search(r'[^/]+$', archive_path).group(0)
+        deploy_path = join("/data/web_static/releases/",
+                           splitext(file_name)[0])
+        sudo("mkdir -p {}".format(deploy_path))
 
-        # Create new directory for release
-        run("mkdir -p {}".format(folder_path))
+        sudo("tar -xzf /tmp/{} -C {}".format(file_name, deploy_path))
 
-        # Untar archive
-        run("tar -xzf /tmp/{} -C {}".format(file_name, folder_path))
+        with cd(deploy_path):
+            sudo("mv web_static/* .")
+            sudo("rm -rf web_static")
 
-        # Delete the archive from the web server
-        run("rm -rf /tmp/{}".format(file_name))
+        sudo("rm /tmp/{}".format(file_name))
+        sudo("rm -rf /data/web_static/current")
 
-        # Move extraction to proper directory
-        run("mv {}web_static/* {}".format(folder_path, folder_path))
+        sudo('ln -sf {} /data/web_static/current'.format(deploy_path))
+    except Exception as err:
+        return False
 
-        # Delete first copy of extraction after move
-        run("rm -rf {}web_static".format(folder_path))
+    return True
 
-        # Delete the symbolic link /data/web_static/current from the web server
-        run("rm -rf /data/web_static/current")
 
-        # Create new the symbolic link /data/web_static/current on web server,
-        # linked to the new version of your code,
-        # (/data/web_static/releases/<archive filename without extension>
-        run("ln -s {} /data/web_static/current".format(folder_path))
-
-        print('New version deployed!')
-        success = True
-
-    except Exception:
-        success = False
-        print("Could not deploy")
-    return success
+def deploy():
+    """
+    Deploys the web_static content to the web servers.
+    """
+    archive_path = do_pack()
+    if not archive_path:
+        return False
+    return do_deploy(archive_path)
